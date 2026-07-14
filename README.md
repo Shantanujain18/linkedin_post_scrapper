@@ -12,7 +12,7 @@ This extension runs directly inside the currently open Chrome profile, so it can
    npm run build
    ```
 
-2. Open the Chrome profile named **Vaishali**.
+2. Open the Chrome profile.
 3. Visit `chrome://extensions`.
 4. Turn on **Developer mode** in the upper-right corner.
 5. Click **Load unpacked**.
