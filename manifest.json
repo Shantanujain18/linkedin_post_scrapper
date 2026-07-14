@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "LinkedIn Post CSV Scraper",
+  "version": "1.0.0",
+  "description": "Export LinkedIn post search results, including expanded post text, to CSV.",
+  "permissions": ["activeTab", "scripting", "storage", "tabs"],
+  "host_permissions": ["https://www.linkedin.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "LinkedIn Post CSV Scraper",
+    "default_popup": "popup.html"
+  }
+}

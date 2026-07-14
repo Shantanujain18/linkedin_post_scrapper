@@ -1,0 +1,19 @@
+# Installed dependencies
+node_modules/
+
+# Vite production output (recreate with: npm run build)
+dist/
+
+# Playwright output
+playwright-report/
+test-results/
+blob-report/
+
+# Local environment and editor files
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+.idea/
+.vscode/
