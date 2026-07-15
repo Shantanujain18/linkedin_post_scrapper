@@ -3,9 +3,21 @@ const SEARCH_PREFIX = "https://www.linkedin.com/search/results/content/";
 function searchUrl(keywords) {
   const params = new URLSearchParams({
     keywords,
-    origin: "SWITCH_SEARCH_VERTICAL"
+    origin: "FACETED_SEARCH",
+    // LinkedIn expects a JSON array string: ["past-24h"]
+    datePosted: '["past-24h"]'
   });
   return `${SEARCH_PREFIX}?${params.toString()}`;
+}
+
+function sameSearchUrl(left, right) {
+  try {
+    const a = new URL(left);
+    const b = new URL(right);
+    return a.origin === b.origin && a.pathname === b.pathname && a.searchParams.toString() === b.searchParams.toString();
+  } catch {
+    return false;
+  }
 }
 
 async function publishStatus(message, running) {
@@ -42,9 +54,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         keywords: message.keywords,
         limit: message.limit
       });
-      await publishStatus("Opening LinkedIn search…", true);
+      await publishStatus("Opening LinkedIn search (Past 24 hours)…", true);
       const destination = searchUrl(message.keywords);
-      if (tab.url?.startsWith(SEARCH_PREFIX)) {
+      if (sameSearchUrl(tab.url || "", destination)) {
         // Avoid relying on tabs.onUpdated when the requested search URL is
         // already open; Chrome may not emit an update for an identical URL.
         await beginScrape(tab.id, job);
@@ -82,6 +94,6 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete" || !tab.url?.startsWith(SEARCH_PREFIX)) return;
   const { pendingJob } = await chrome.storage.local.get("pendingJob");
   if (!pendingJob || pendingJob.tabId !== tabId) return;
-  await publishStatus("LinkedIn loaded; reading posts…", true);
+  await publishStatus("LinkedIn loaded; reading past-24h posts…", true);
   await beginScrape(tabId, pendingJob);
 });

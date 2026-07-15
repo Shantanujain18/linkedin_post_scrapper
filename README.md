@@ -29,7 +29,7 @@ This extension runs directly inside the currently open Chrome profile, so it can
 3. Enter `hiring python` or different keywords.
 4. Choose the maximum number of posts.
 5. Click **Search and export**.
-6. Keep that LinkedIn tab open. The extension opens LinkedIn search, expands each post's **more** control, scrolls, and downloads a CSV when finished.
+6. Keep that LinkedIn tab open. The extension opens LinkedIn Post search with the **Past 24 hours** filter (`datePosted=["past-24h"]`), expands each post's **more** control, scrolls, and downloads a CSV when finished.
 
 The CSV contains `posted_by`, `posted_by_url`, `posted_date`, `posted_content`, `post_url`, and `scraped_at`.
 

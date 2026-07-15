@@ -35,7 +35,7 @@ function App() {
       return setStatus("Post limit must be between 1 and 500.");
     }
     setRunning(true);
-    setStatus("Opening LinkedIn search…");
+    setStatus("Opening LinkedIn search (Past 24 hours)…");
     const response = await chrome.runtime.sendMessage({
       type: "START",
       keywords: normalizedKeywords,
@@ -76,7 +76,7 @@ function App() {
         <button type="button" className="secondary" onClick={stop} disabled={!running}>Stop</button>
       </div>
       <p id="status" role="status">{status}</p>
-      <p className="hint">Keep the LinkedIn tab open while the extension scrolls.</p>
+      <p className="hint">Searches LinkedIn Posts from the past 24 hours only. Keep the LinkedIn tab open while the extension scrolls.</p>
     </main>
   );
 }
