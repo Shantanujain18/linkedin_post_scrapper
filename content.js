@@ -277,8 +277,13 @@
     setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
   }
 
-  async function progress(message, running = true) {
-    await chrome.runtime.sendMessage({ type: "SCRAPE_PROGRESS", message, running });
+  async function progress(message, running = true, postsCollected) {
+    await chrome.runtime.sendMessage({
+      type: "SCRAPE_PROGRESS",
+      message,
+      running,
+      postsCollected
+    });
   }
 
   async function waitForCards(timeoutMs = 30_000) {
@@ -302,31 +307,44 @@
     let stagnantScrolls = 0;
     const maxScrolls = 40;
 
-    for (let scroll = 0; scroll <= maxScrolls && posts.length < limit; scroll += 1) {
-      if (globalThis.__linkedinCsvScraperStop) throw new Error("Stopped");
-      const before = posts.length;
-      const cards = findCards();
+    try {
+      for (let scroll = 0; scroll <= maxScrolls && posts.length < limit; scroll += 1) {
+        if (globalThis.__linkedinCsvScraperStop) throw new Error("Stopped");
+        const before = posts.length;
+        const cards = findCards();
 
-      for (const card of cards) {
-        if (posts.length >= limit || globalThis.__linkedinCsvScraperStop) break;
-        const post = await extractPost(card);
-        if (!post) continue;
-        const identity = post.post_url || `${post.posted_by}|${post.posted_content.slice(0, 180)}`;
-        if (seen.has(identity)) continue;
-        seen.add(identity);
-        posts.push(post);
-        await progress(`Collected ${posts.length}/${limit}: ${post.posted_by || "Unknown author"}`);
+        for (const card of cards) {
+          if (posts.length >= limit || globalThis.__linkedinCsvScraperStop) break;
+          const post = await extractPost(card);
+          if (!post) continue;
+          const identity = post.post_url || `${post.posted_by}|${post.posted_content.slice(0, 180)}`;
+          if (seen.has(identity)) continue;
+          seen.add(identity);
+          posts.push(post);
+          await progress(`Collected ${posts.length}/${limit}: ${post.posted_by || "Unknown author"}`, true, posts.length);
+        }
+
+        stagnantScrolls = posts.length === before ? stagnantScrolls + 1 : 0;
+        if (stagnantScrolls >= 4) break;
+        window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+        await delay(2200);
       }
 
-      stagnantScrolls = posts.length === before ? stagnantScrolls + 1 : 0;
-      if (stagnantScrolls >= 4) break;
-      window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
-      await delay(2200);
+      if (!posts.length) throw new Error("No readable posts were found.");
+      downloadCsv(posts, keywords);
+      await progress(`Done — downloaded ${posts.length} posts as CSV.`, false, posts.length);
+    } catch (error) {
+      if (posts.length) {
+        downloadCsv(posts, keywords);
+        await progress(
+          `${error.message} — saved ${posts.length} posts collected so far.`,
+          false,
+          posts.length
+        );
+      } else {
+        await progress(`Error: ${error.message}`, false, 0);
+      }
     }
-
-    if (!posts.length) throw new Error("No readable posts were found.");
-    downloadCsv(posts, keywords);
-    await progress(`Done — downloaded ${posts.length} posts as CSV.`, false);
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -336,9 +354,7 @@
       return;
     }
     if (message.type !== "SCRAPE") return;
-    scrape(message.keywords, message.limit).catch((error) => {
-      progress(`Error: ${error.message}`, false).catch(() => {});
-    });
+    scrape(message.keywords, message.limit);
     sendResponse({ ok: true });
   });
 })();

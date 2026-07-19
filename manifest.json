@@ -1,12 +1,18 @@
 {
   "manifest_version": 3,
   "name": "ReachPod",
-  "version": "1.0.0",
-  "description": "Export LinkedIn post search results, including expanded post text, to CSV.",
+  "version": "2.1.0",
+  "description": "Signed-in LinkedIn post scraper with daily ReachPod quota.",
   "permissions": ["activeTab", "scripting", "storage", "tabs"],
-  "host_permissions": ["https://www.linkedin.com/*"],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "http://localhost:3002/*",
+    "https://reachpod.vercel.app/*",
+    "https://*.supabase.co/*"
+  ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "action": {
     "default_title": "ReachPod",

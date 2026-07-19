@@ -1,38 +1,62 @@
 # Chrome extension installation
 
-This extension runs directly inside the currently open Chrome profile, so it can use the existing LinkedIn login. The popup is React-built with Vite; the scraper runs as a Chrome content script. Playwright is included for automated build tests—Playwright itself cannot execute inside a Chrome extension.
+ReachPod Chrome extension: scrapes LinkedIn posts into CSV. Requires a signed-in ReachPod account (same Supabase auth as the web app). Free plan is capped at **50 posts/day** (override per user via `profiles.daily_post_limit` in the database).
 
-## Install in the Vaishali profile
+## Configure
 
-1. Open Terminal and build the extension:
+```bash
+cd linkedin_post_scrapper
+cp .env.example .env.development
+cp .env.example .env.production
+```
+
+Use the **same keys** in both files — only the values change:
+
+```env
+VITE_API_BASE_URL=...
+VITE_SUPABASE_URL=...
+VITE_SUPABASE_ANON_KEY=...
+```
+
+| File | Typical `VITE_API_BASE_URL` | Build command |
+|------|----------------------------|---------------|
+| `.env.development` | `http://localhost:3002` | `npm run build` / `npm run build:local` |
+| `.env.production` | `https://reachpod.vercel.app` | `npm run build:production` |
+
+`VITE_SUPABASE_*` is usually identical in both (same Supabase project as the web app).
+
+Also run the SQL migrations on Supabase (including `005_extension_version.sql`).
+
+## Install in Chrome
+
+1. Build:
 
    ```bash
-   cd /Users/apple/Desktop/Linkedin_Scrapper/chrome-extension
    npm install
    npm run build
    ```
 
-2. Open the Chrome profile.
-3. Visit `chrome://extensions`.
-4. Turn on **Developer mode** in the upper-right corner.
-5. Click **Load unpacked**.
-6. Select the compiled folder:
-
-   `/Users/apple/Desktop/Linkedin_Scrapper/chrome-extension/dist`
-
-7. Pin **ReachPod** from Chrome's Extensions menu.
+2. Open `chrome://extensions`, enable **Developer mode**, **Load unpacked**, select the `dist` folder.
+3. Pin **ReachPod**.
+4. Sign in with your ReachPod email/password, then scrape.
 
 ## Export posts
 
-1. Open any normal tab while signed into LinkedIn.
-2. Click the extension icon.
-3. Enter `hiring python` or different keywords.
-4. Choose the maximum number of posts.
-5. Click **Search and export**.
-6. Keep that LinkedIn tab open. The extension opens LinkedIn Post search with the **Past 24 hours** filter (`datePosted=["past-24h"]`), expands each post's **more** control, scrolls, and downloads a CSV when finished.
+1. Open a tab while signed into LinkedIn.
+2. Open the extension, sign in to ReachPod if needed.
+3. Enter keywords and a post limit (clamped to remaining daily quota).
+4. Click **Search and export**. Keep the LinkedIn tab open.
 
-The CSV contains `posted_by`, `posted_by_url`, `posted_date`, `posted_content`, `post_url`, and `scraped_at`.
+CSV columns: `posted_by`, `posted_by_url`, `posted_date`, `posted_content`, `post_url`, `scraped_at`.
 
-To update the extension after changing its files, run `npm run build`, then return to `chrome://extensions` and click the extension's reload button. Make sure Chrome is loading `dist`, not the source folder.
+## Raise a user’s daily limit
 
-If the status still says “No posts appeared,” reload the extension and start again from a LinkedIn tab. The current build reports the URL and a short description of what LinkedIn rendered, which helps distinguish a stale build from a login/search-page issue.
+In Supabase SQL Editor (or any Postgres client):
+
+```sql
+update public.profiles
+set daily_post_limit = 500, plan = 'paid'
+where user_id = '<auth-user-uuid>';
+```
+
+Reload the extension after changing source (`npm run build`, then the reload button on `chrome://extensions`).
