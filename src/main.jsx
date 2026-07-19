@@ -54,7 +54,7 @@ function App() {
 
   return (
     <main>
-      <h1>LinkedIn Post Scraper</h1>
+      <h1>ReachPod</h1>
       <label htmlFor="keywords">Search keywords</label>
       <input
         id="keywords"

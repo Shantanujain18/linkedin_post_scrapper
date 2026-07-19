@@ -20,7 +20,7 @@ This extension runs directly inside the currently open Chrome profile, so it can
 
    `/Users/apple/Desktop/Linkedin_Scrapper/chrome-extension/dist`
 
-7. Pin **LinkedIn Post CSV Scraper** from Chrome's Extensions menu.
+7. Pin **ReachPod** from Chrome's Extensions menu.
 
 ## Export posts
 

@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "LinkedIn Post CSV Scraper",
+  "name": "ReachPod",
   "version": "1.0.0",
   "description": "Export LinkedIn post search results, including expanded post text, to CSV.",
   "permissions": ["activeTab", "scripting", "storage", "tabs"],
@@ -9,7 +9,7 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "LinkedIn Post CSV Scraper",
+    "default_title": "ReachPod",
     "default_popup": "popup.html"
   }
 }

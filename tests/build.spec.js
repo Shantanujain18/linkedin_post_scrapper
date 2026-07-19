@@ -11,7 +11,7 @@ test("built extension has a valid popup and scraper entries", async ({ page }) =
   expect(background).toContain('datePosted');
   expect(background).toContain("past-24h");
   await page.goto(`file://${resolve(dist, "popup.html")}`);
-  await expect(page.getByRole("heading", { name: "LinkedIn Post Scraper" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "ReachPod" })).toBeVisible();
   await expect(page.getByLabel("Search keywords")).toHaveValue("hiring python");
   await expect(page.getByText(/past 24 hours/i)).toBeVisible();
 });
