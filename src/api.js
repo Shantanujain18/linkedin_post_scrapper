@@ -157,3 +157,17 @@ export async function refundQuota(unused) {
     body: JSON.stringify({ action: "refund", unused })
   });
 }
+
+export async function pushScrapedPosts(posts) {
+  return apiFetch("/api/scrape/posts", {
+    method: "POST",
+    body: JSON.stringify({ posts })
+  });
+}
+
+export async function generateDrafts() {
+  return apiFetch("/api/drafts", {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}

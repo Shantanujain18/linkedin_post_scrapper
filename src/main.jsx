@@ -6,6 +6,18 @@ import { API_BASE_URL, IS_PRODUCTION_API } from "./config.js";
 import { getExtensionVersion } from "./version.js";
 import "./styles.css";
 
+const PHASES = [
+  { id: "scraping", label: "Scraping" },
+  { id: "uploading", label: "Uploading" },
+  { id: "writing", label: "Writing emails" },
+  { id: "done", label: "Done" }
+];
+
+function phaseIndex(phase) {
+  const idx = PHASES.findIndex((item) => item.id === phase);
+  return idx >= 0 ? idx : -1;
+}
+
 function UpdateRequired({ versionInfo }) {
   const required = versionInfo?.required_version || "latest";
   const installed = versionInfo?.installed_version || getExtensionVersion();
@@ -32,6 +44,53 @@ function UpdateRequired({ versionInfo }) {
   );
 }
 
+function PipelineProgress({ phase, postsCollected, scrapeLimit, running }) {
+  if (!phase || phase === "idle" || phase === "error") return null;
+  const active = phaseIndex(phase);
+  const limit = Math.max(1, Number(scrapeLimit) || 1);
+  const collected = Math.max(0, Number(postsCollected) || 0);
+  const scrapePct =
+    phase === "scraping" ? Math.min(100, Math.round((collected / limit) * 100)) : phase === "done" || active > 0 ? 100 : 0;
+
+  return (
+    <section className="pipeline" aria-live="polite">
+      <ol className="pipeline-steps">
+        {PHASES.map((item, index) => {
+          let state = "todo";
+          if (phase === "done" || index < active) state = "done";
+          else if (index === active && running) state = "active";
+          else if (index === active && phase === "done") state = "done";
+          return (
+            <li key={item.id} className={`pipeline-step ${state}`}>
+              <span className="pipeline-dot" aria-hidden="true" />
+              <span>{item.label}</span>
+            </li>
+          );
+        })}
+      </ol>
+      {(phase === "scraping" || collected > 0) && phase !== "done" ? (
+        <div className="scrape-progress">
+          <div className="scrape-progress-row">
+            <span>Posts</span>
+            <strong>
+              {collected}
+              {phase === "scraping" ? ` / ${limit}` : ""}
+            </strong>
+          </div>
+          <div className="quota-bar">
+            <div className="quota-fill" style={{ width: `${scrapePct}%` }} />
+          </div>
+        </div>
+      ) : null}
+      {phase === "uploading" || phase === "writing" ? (
+        <div className="quota-bar indeterminate" aria-hidden="true">
+          <div className="quota-fill" />
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function App() {
   const [session, setSession] = useState(null);
   const [authReady, setAuthReady] = useState(false);
@@ -48,6 +107,10 @@ function App() {
   const [quotaError, setQuotaError] = useState("");
   const [versionInfo, setVersionInfo] = useState(null);
   const [versionBlocked, setVersionBlocked] = useState(false);
+  const [phase, setPhase] = useState("idle");
+  const [postsCollected, setPostsCollected] = useState(0);
+  const [scrapeLimit, setScrapeLimit] = useState(0);
+  const [draftsCreated, setDraftsCreated] = useState(null);
 
   async function checkVersion() {
     try {
@@ -112,6 +175,16 @@ function App() {
       if (state.scrapeStatus) {
         setStatus(state.scrapeStatus.message || "Ready");
         setRunning(Boolean(state.scrapeStatus.running));
+        if (state.scrapeStatus.phase) setPhase(state.scrapeStatus.phase);
+        if (Number.isFinite(state.scrapeStatus.postsCollected)) {
+          setPostsCollected(state.scrapeStatus.postsCollected);
+        }
+        if (Number.isFinite(state.scrapeStatus.scrapeLimit)) {
+          setScrapeLimit(state.scrapeStatus.scrapeLimit);
+        }
+        if (Number.isFinite(state.scrapeStatus.draftsCreated)) {
+          setDraftsCreated(state.scrapeStatus.draftsCreated);
+        }
       }
     });
 
@@ -119,6 +192,10 @@ function App() {
       if (message.type !== "STATUS") return;
       setStatus(message.message);
       setRunning(Boolean(message.running));
+      if (message.phase) setPhase(message.phase);
+      if (Number.isFinite(message.postsCollected)) setPostsCollected(message.postsCollected);
+      if (Number.isFinite(message.scrapeLimit)) setScrapeLimit(message.scrapeLimit);
+      if (Number.isFinite(message.draftsCreated)) setDraftsCreated(message.draftsCreated);
       if (message.quota) setQuota((prev) => ({ ...(prev || {}), ...message.quota }));
       if (!message.running) loadQuota().catch(() => {});
     };
@@ -151,6 +228,7 @@ function App() {
       setSession(null);
       setQuota(null);
       setStatus("Signed out");
+      setPhase("idle");
     } finally {
       setAuthBusy(false);
     }
@@ -161,6 +239,7 @@ function App() {
     const normalizedLimit = Number(limit);
     if (versionBlocked) return setStatus("Update the ReachPod extension to continue.");
     if (!session) return setStatus("Sign in to ReachPod first.");
+    if (!quota?.ready?.has_resume) return setStatus("Upload your resume in ReachPod before scraping.");
     if (!normalizedKeywords) return setStatus("Enter at least one search keyword.");
     if (!Number.isInteger(normalizedLimit) || normalizedLimit < 1 || normalizedLimit > 500) {
       return setStatus("Post limit must be between 1 and 500.");
@@ -170,6 +249,10 @@ function App() {
     }
 
     setRunning(true);
+    setPhase("scraping");
+    setPostsCollected(0);
+    setDraftsCreated(null);
+    setScrapeLimit(Math.min(normalizedLimit, quota?.remaining || normalizedLimit));
     setStatus("Reserving daily quota…");
     const response = await chrome.runtime.sendMessage({
       type: "START",
@@ -178,6 +261,7 @@ function App() {
     });
     if (!response?.ok) {
       setRunning(false);
+      setPhase("error");
       setStatus(response?.error || "Could not start the scraper.");
       if (/update|version/i.test(response?.error || "")) {
         await checkVersion();
@@ -190,6 +274,11 @@ function App() {
   async function stop() {
     setStatus("Stopping…");
     await chrome.runtime.sendMessage({ type: "STOP" });
+  }
+
+  function openPortal(page) {
+    const url = `${API_BASE_URL}/dashboard?page=${page}`;
+    chrome.tabs.create({ url });
   }
 
   const envHint = (
@@ -268,6 +357,9 @@ function App() {
   const remaining = quota ? Number(quota.remaining) : null;
   const used = quota ? Number(quota.posts_fetched_today) : null;
   const dailyLimit = quota ? Number(quota.daily_post_limit) : null;
+  const hasResume = Boolean(quota?.ready?.has_resume);
+  const pipelineDone = phase === "done" && !running;
+  const canStart = hasResume && remaining !== 0 && !running;
 
   return (
     <main>
@@ -311,13 +403,22 @@ function App() {
         )}
       </section>
 
+      {!hasResume && quota ? (
+        <section className="prereq-banner" role="alert">
+          <p>Upload your resume in ReachPod before scraping — we need it to write emails.</p>
+          <button type="button" className="secondary compact" onClick={() => openPortal("profile")}>
+            Open Your profile
+          </button>
+        </section>
+      ) : null}
+
       <label htmlFor="keywords">Search keywords</label>
       <input
         id="keywords"
         value={keywords}
         onChange={(event) => setKeywords(event.target.value)}
         autoComplete="off"
-        disabled={running || remaining === 0}
+        disabled={!canStart}
       />
       <label htmlFor="limit">Maximum posts</label>
       <input
@@ -327,22 +428,40 @@ function App() {
         min="1"
         max={remaining != null ? Math.max(1, remaining) : 500}
         onChange={(event) => setLimit(Number(event.target.value))}
-        disabled={running || remaining === 0}
+        disabled={!canStart}
       />
       <div className="buttons">
-        <button type="button" onClick={start} disabled={running || remaining === 0}>
-          Search and export
+        <button type="button" onClick={start} disabled={!canStart}>
+          Search and prepare emails
         </button>
-        <button type="button" className="secondary" onClick={stop} disabled={!running}>
+        <button type="button" className="secondary" onClick={stop} disabled={!running || phase !== "scraping"}>
           Stop
         </button>
       </div>
+
+      <PipelineProgress
+        phase={phase}
+        postsCollected={postsCollected}
+        scrapeLimit={scrapeLimit || limit}
+        running={running}
+      />
+
       <p id="status" role="status">
         {status}
       </p>
+
+      {pipelineDone ? (
+        <div className="buttons single">
+          <button type="button" onClick={() => openPortal("send")}>
+            Open Send emails
+            {draftsCreated != null ? ` (${draftsCreated})` : ""}
+          </button>
+        </div>
+      ) : null}
+
       <p className="hint">
-        Searches LinkedIn Posts from the past 24 hours only. Keep the LinkedIn tab open while the
-        extension scrolls.
+        Searches LinkedIn Posts from the past 24 hours, saves them to ReachPod, and writes drafts.
+        Keep the LinkedIn tab open while scraping.
       </p>
       {envHint}
     </main>

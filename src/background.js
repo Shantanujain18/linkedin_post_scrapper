@@ -1,5 +1,5 @@
 import { getStoredSession, getValidAccessToken } from "./auth.js";
-import { refundQuota, reserveQuota } from "./api.js";
+import { generateDrafts, pushScrapedPosts, refundQuota, reserveQuota } from "./api.js";
 
 const SEARCH_PREFIX = "https://www.linkedin.com/search/results/content/";
 
@@ -34,6 +34,13 @@ async function publishStatus(message, running, extra = {}) {
   chrome.runtime.sendMessage({ type: "STATUS", message, running, ...extra }).catch(() => {});
 }
 
+async function refundUnused(job, used) {
+  if (!job?.reserved) return;
+  const collected = Math.max(0, Math.floor(Number(used) || 0));
+  const unused = Math.max(0, job.reserved - collected);
+  if (unused > 0) await refundQuota(unused).catch(() => {});
+}
+
 async function beginScrape(tabId, job) {
   try {
     await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
@@ -44,10 +51,92 @@ async function beginScrape(tabId, job) {
     });
     if (!response?.ok) throw new Error(response?.error || "The page rejected the scrape request.");
   } catch (error) {
-    if (job.reserved) {
-      await refundQuota(job.reserved).catch(() => {});
+    await refundUnused(job, 0);
+    await chrome.storage.local.remove("pendingJob");
+    await publishStatus(`Error: ${error.message}`, false, { phase: "error" });
+  }
+}
+
+async function runPostScrapePipeline(posts, note) {
+  const { pendingJob } = await chrome.storage.local.get("pendingJob");
+  const scrapeLimit = Number(pendingJob?.limit) || posts.length;
+  const postsCollected = posts.length;
+
+  try {
+    await publishStatus(note || `Uploading ${postsCollected} posts…`, true, {
+      phase: "uploading",
+      postsCollected,
+      scrapeLimit
+    });
+
+    const upload = await pushScrapedPosts(posts);
+    await refundUnused(pendingJob, postsCollected);
+    await chrome.storage.local.remove("pendingJob");
+
+    await publishStatus(
+      `Uploaded ${upload.imported || postsCollected} posts (${upload.withEmails || 0} with email). Writing emails…`,
+      true,
+      {
+        phase: "writing",
+        postsCollected,
+        scrapeLimit,
+        imported: upload.imported,
+        withEmails: upload.withEmails
+      }
+    );
+
+    let drafts;
+    try {
+      drafts = await generateDrafts();
+    } catch (draftError) {
+      const msg = draftError?.message || "Could not write emails.";
+      await publishStatus(
+        /email/i.test(msg)
+          ? `Uploaded ${upload.imported || postsCollected} posts, but none had emails to draft. Open ReachPod to review.`
+          : `Uploaded posts, but writing emails failed: ${msg}`,
+        false,
+        {
+          phase: "done",
+          postsCollected,
+          scrapeLimit,
+          imported: upload.imported,
+          withEmails: upload.withEmails,
+          draftsCreated: 0
+        }
+      );
+      return;
     }
-    await publishStatus(`Error: ${error.message}`, false);
+    const created = Number(drafts.created) || 0;
+    const skipped = Number(drafts.skipped) || 0;
+    const pending = Number(drafts.pending) || 0;
+
+    await publishStatus(
+      created
+        ? `Ready — ${created} draft${created === 1 ? "" : "s"} prepared. Open Send emails in ReachPod.`
+        : `Done — no new drafts (${skipped} skipped${pending ? `, ${pending} still pending` : ""}). Check your resume/skills or open ReachPod.`,
+      false,
+      {
+        phase: "done",
+        postsCollected,
+        scrapeLimit,
+        imported: upload.imported,
+        withEmails: upload.withEmails,
+        draftsCreated: created,
+        draftsSkipped: skipped,
+        draftsPending: pending
+      }
+    );
+  } catch (error) {
+    const stillPending = await chrome.storage.local.get("pendingJob");
+    if (stillPending.pendingJob) {
+      await refundUnused(stillPending.pendingJob, postsCollected);
+      await chrome.storage.local.remove("pendingJob");
+    }
+    await publishStatus(`Error: ${error.message || "Pipeline failed."}`, false, {
+      phase: "error",
+      postsCollected,
+      scrapeLimit
+    });
   }
 }
 
@@ -62,7 +151,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!tab?.id) throw new Error("No active Chrome tab was found.");
 
       const requested = Math.max(1, Math.min(500, Number(message.limit) || 50));
-      await publishStatus("Checking daily post quota…", true);
+      await publishStatus("Checking daily post quota…", true, { phase: "scraping" });
       const reservation = await reserveQuota(requested);
       const allowed = Number(reservation.allowed) || 0;
       if (!allowed) {
@@ -87,7 +176,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       await publishStatus(
         `Quota OK — fetching up to ${allowed} posts (Past 24 hours)…`,
         true,
-        { quota: reservation }
+        { quota: reservation, phase: "scraping", scrapeLimit: allowed, postsCollected: 0 }
       );
 
       const destination = searchUrl(message.keywords);
@@ -98,16 +187,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       sendResponse({ ok: true, allowed, quota: reservation });
     })().catch(async (error) => {
-      const message = error.message || "Could not start scrape.";
+      const text = error.message || "Could not start scrape.";
       await publishStatus(
         error.code === "EXTENSION_VERSION_MISMATCH" || error.code === "EXTENSION_VERSION_REQUIRED"
-          ? message
-          : `Error: ${message}`,
-        false
+          ? text
+          : `Error: ${text}`,
+        false,
+        { phase: "error" }
       );
       sendResponse({
         ok: false,
-        error: message,
+        error: text,
         code: error.code,
         update_url: error.update_url,
         required_version: error.required_version,
@@ -123,15 +213,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (pendingJob?.tabId) {
         try {
           await chrome.tabs.sendMessage(pendingJob.tabId, { type: "STOP_SCRAPE" });
-          await publishStatus("Stopping…", true);
+          await publishStatus("Stopping…", true, { phase: "scraping" });
         } catch {
-          // Content script not running yet (search page still loading).
-          if (pendingJob.reserved) await refundQuota(pendingJob.reserved).catch(() => {});
+          await refundUnused(pendingJob, 0);
           await chrome.storage.local.remove("pendingJob");
-          await publishStatus("Stopped", false);
+          await publishStatus("Stopped", false, { phase: "idle" });
         }
       } else {
-        await publishStatus("Stopped", false);
+        await publishStatus("Stopped", false, { phase: "idle" });
       }
       sendResponse({ ok: true });
     })();
@@ -140,22 +229,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "SCRAPE_PROGRESS") {
     (async () => {
-      const { pendingJob } = await chrome.storage.local.get("pendingJob");
       const postsCollected = Number(message.postsCollected);
-      if (!message.running && pendingJob?.reserved) {
-        const used = Number.isFinite(postsCollected) ? postsCollected : pendingJob.reserved;
-        const unused = Math.max(0, pendingJob.reserved - used);
-        if (unused > 0) {
-          await refundQuota(unused).catch(() => {});
-        }
-        await chrome.storage.local.remove("pendingJob");
-      } else if (!message.running) {
+      if (!message.running) {
+        const { pendingJob } = await chrome.storage.local.get("pendingJob");
+        await refundUnused(pendingJob, Number.isFinite(postsCollected) ? postsCollected : 0);
         await chrome.storage.local.remove("pendingJob");
       }
       await publishStatus(message.message, message.running, {
-        postsCollected: Number.isFinite(postsCollected) ? postsCollected : undefined
+        phase: message.phase || (message.running ? "scraping" : "error"),
+        postsCollected: Number.isFinite(postsCollected) ? postsCollected : undefined,
+        scrapeLimit: message.scrapeLimit
       });
     })().catch(() => {});
+  }
+
+  if (message.type === "SCRAPE_COMPLETE") {
+    const posts = Array.isArray(message.posts) ? message.posts : [];
+    runPostScrapePipeline(posts, message.message).catch(() => {});
   }
 });
 
@@ -163,6 +253,10 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete" || !tab.url?.startsWith(SEARCH_PREFIX)) return;
   const { pendingJob } = await chrome.storage.local.get("pendingJob");
   if (!pendingJob || pendingJob.tabId !== tabId) return;
-  await publishStatus("LinkedIn loaded; reading past-24h posts…", true);
+  await publishStatus("LinkedIn loaded; reading past-24h posts…", true, {
+    phase: "scraping",
+    scrapeLimit: pendingJob.limit,
+    postsCollected: 0
+  });
   await beginScrape(tabId, pendingJob);
 });

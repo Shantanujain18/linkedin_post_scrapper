@@ -249,40 +249,21 @@
     };
   }
 
-  function csvCell(value) {
-    return `"${String(value ?? "").replaceAll('"', '""')}"`;
-  }
-
-  function downloadCsv(posts, keywords) {
-    const fields = [
-      "posted_by",
-      "posted_by_url",
-      "posted_date",
-      "posted_content",
-      "post_url",
-      "scraped_at"
-    ];
-    const rows = [fields.join(",")];
-    for (const post of posts) rows.push(fields.map((field) => csvCell(post[field])).join(","));
-    const blob = new Blob(["\uFEFF", rows.join("\r\n")], { type: "text/csv;charset=utf-8" });
-    const objectUrl = URL.createObjectURL(blob);
-    const safeKeywords = keywords.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "");
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const anchor = document.createElement("a");
-    anchor.href = objectUrl;
-    anchor.download = `linkedin_${safeKeywords || "posts"}_${timestamp}.csv`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
-  }
-
   async function progress(message, running = true, postsCollected) {
     await chrome.runtime.sendMessage({
       type: "SCRAPE_PROGRESS",
       message,
       running,
-      postsCollected
+      postsCollected,
+      phase: running ? "scraping" : undefined
+    });
+  }
+
+  async function complete(posts, message) {
+    await chrome.runtime.sendMessage({
+      type: "SCRAPE_COMPLETE",
+      posts,
+      message
     });
   }
 
@@ -331,15 +312,12 @@
       }
 
       if (!posts.length) throw new Error("No readable posts were found.");
-      downloadCsv(posts, keywords);
-      await progress(`Done — downloaded ${posts.length} posts as CSV.`, false, posts.length);
+      await complete(posts, `Scraped ${posts.length} posts — uploading…`);
     } catch (error) {
       if (posts.length) {
-        downloadCsv(posts, keywords);
-        await progress(
-          `${error.message} — saved ${posts.length} posts collected so far.`,
-          false,
-          posts.length
+        await complete(
+          posts,
+          `${error.message} — uploading ${posts.length} posts collected so far…`
         );
       } else {
         await progress(`Error: ${error.message}`, false, 0);
